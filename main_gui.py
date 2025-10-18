@@ -2,11 +2,11 @@
 🌸 Image Studio – Procesamiento de Imágenes
 Interfaz gráfica usando Tkinter con pestañas.
 
-CAMBIO IMPORTANTE:
+Sistema de operaciones sin acumulación:
 - Cada transformación parte de la imagen ORIGINAL
-- Se crea una copia y se modifica
-- Si aplico otro cambio DIFERENTE, vuelvo a partir de la original
-- Esto evita acumulación de cambios
+- Se guarda en una lista y se recalcula desde cero
+- Si cambias un parámetro, reemplaza la operación anterior
+- Resultado = Original + todas las operaciones en orden
 """
 
 import sys
@@ -16,12 +16,8 @@ import image_processing_lib as ip
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-try:
-    import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
-except Exception as e:
-    print('Error: tkinter no está disponible')
-    sys.exit(1)
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 
 
 class ImageApp:
@@ -29,50 +25,66 @@ class ImageApp:
         self.root = root
         root.title('🌸 Image Studio – Procesamiento de Imágenes')
         
-        # Estado
-        self.original = None          # imagen original (nunca se modifica)
-        self.img = None               # imagen actual a mostrar
-        self.img_tk = None
-        self.img_path = None
-        self.second_img = None
-        self.last_operation = None    # tipo de última operación aplicada
+        # ===== ESTADO DE LA APLICACIÓN =====
+        # Guardamos la imagen original sin tocar, y self.img es lo que se muestra
+        # Las operaciones se guardan en self.operations y se aplican todas de una
+        self.original = None              # imagen de referencia (nunca se modifica)
+        self.img = None                   # resultado visible (se actualiza al aplicar ops)
+        self.img_tk = None                # foto de Tkinter (para mostrar en canvas)
+        self.img_path = None              # ruta del archivo actual
+        self.second_img = None            # segunda imagen para fusión
         
+        # Lista de operaciones activas: [(tipo, {parámetros}), ...]
+        # Ejemplo: [('brightness', {'value': 50}), ('gamma', {'gamma': 1.5})]
+        self.operations = []
+        
+        # Zoom visual: solo para la vista, no modifica la imagen
         self.display_scale = 1.0
+        
+        # Modo presentación: cicla entre imágenes cargadas
         self.presentation_running = False
         self.presentation_interval_ms = 2000
         self.presentation_items = []
         self.presentation_index = 0
-
-        # Estilos
-        self.pink_bg = '#FFF0F6'
-        self.pink_panel = '#FFD6E8'
-        self.pink_accent = '#FFB6C1'
-        self.pink_button = '#FFE8F1'
-        self.text_dark = '#2b2b2b'
-        self.text_light = '#f6f6f6'
-        self.dark_bg = '#2b2b35'
-        self.dark_panel = '#3a3942'
-        self.dark_accent = '#6f4a7a'
-        self.crop_mode = False
-        self.crop_start = None
-        self.crop_end = None
-        self.crop_rect = None
-        self.zoom_mode = False
-        self.zoom_point = None
-        self.zoom_factor = 2.0  # factor de zoom (puede ajustarse)
-
-        self.operations = []  # Lista de (tipo, parámetros)
-
-
         
+        # ===== VARIABLES DE INTERACCIÓN (recorte con mouse) =====
+        self.crop_mode = False            # ¿estamos en modo seleccionar área?
+        self.crop_start = None            # punto inicial del recorte (x, y)
+        self.crop_end = None              # punto final del recorte (x, y)
+        self.crop_rect = None             # ID del rectángulo dibujado en canvas
+        
+        # ===== VARIABLES DE INTERACCIÓN (zoom con mouse) =====
+        self.zoom_mode = False            # ¿estamos en modo zoom?
+        self.zoom_point = None            # punto donde hicimos click
+        self.zoom_factor = 2.0            # factor de ampliación (2x = dobla tamaño)
+        
+        # ===== COLORES (tema rosa claro) =====
+        self.pink_bg = '#FFF0F6'          # fondo principal
+        self.pink_panel = '#FFD6E8'       # pestañas y paneles
+        self.pink_accent = '#FFB6C1'      # botones al pasar mouse
+        self.pink_button = '#FFE8F1'      # botones normales
+        self.text_dark = '#2b2b2b'        # texto modo claro
+        self.text_light = '#f6f6f6'       # texto modo oscuro
+        
+        # ===== COLORES (tema oscuro) =====
+        self.dark_bg = '#2b2b35'          # fondo tema oscuro
+        self.dark_panel = '#3a3942'       # paneles tema oscuro
+        self.dark_accent = '#6f4a7a'      # acentos tema oscuro
+        
+        # Configura el fondo de la ventana
         root.configure(bg=self.pink_bg)
+        
+        # Crea el sistema de estilos de Tkinter
         self.style = ttk.Style()
         
         try:
+            # Intenta usar el tema 'clam' que funciona bien en todas las plataformas
             self.style.theme_use('clam')
         except:
+            # Si falla, usa el tema por defecto (sin problemas)
             pass
-
+        
+        # Define estilos personalizados para frames, labels, botones
         self.style.configure('Pink.TFrame', background=self.pink_bg)
         self.style.configure('Pink.TLabel', background=self.pink_bg, foreground=self.text_dark, font=('Segoe UI', 10))
         self.style.configure('PinkBold.TLabel', background=self.pink_bg, foreground=self.text_dark, font=('Segoe UI', 10, 'bold'))
@@ -81,8 +93,8 @@ class ImageApp:
         self.style.configure('Pink.TNotebook', background=self.pink_bg)
         self.style.configure('Pink.TNotebook.Tab', background=self.pink_panel, padding=[10, 6], font=('Segoe UI', 9))
         self.style.map('Pink.TNotebook.Tab', background=[('selected', self.pink_accent)])
-
-        # Menú
+        
+        # ===== MENÚ SUPERIOR =====
         menubar = tk.Menu(root)
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label='📁 Abrir imagen', command=self.open_image)
@@ -92,38 +104,46 @@ class ImageApp:
         filemenu.add_command(label='❌ Salir', command=root.quit)
         menubar.add_cascade(label='Archivo', menu=filemenu)
         root.config(menu=menubar)
-
-        # Layout principal
+        
+        # ===== LAYOUT PRINCIPAL =====
+        # La ventana se divide en dos: izquierda (imagen grande) y derecha (controles)
         left = tk.Frame(root, bg=self.pink_bg)
         left.pack(side='left', fill='both', expand=True)
         right = tk.Frame(root, width=380, bg=self.pink_bg)
         right.pack(side='right', fill='y')
-
+        
+        # Canvas donde se muestra la imagen
+        # Es un área negra donde dibujamos la foto
         self.canvas = tk.Canvas(left, bg='black', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
-
+        
+        # Barra de estado en la parte inferior
+        # Muestra mensajes como "🖼️ Imagen abierta", "✨ Brillo aplicado", etc.
         self.status = tk.Label(root, text='✨ Listo', bd=1, relief='sunken', anchor='w', bg=self.pink_button)
         self.status.pack(side='bottom', fill='x')
-
-        # Notebook (pestañas)
+        
+        # ===== PESTAÑAS (Notebook) =====
+        # Sistema de tabs para organizar los controles
         notebook = ttk.Notebook(right, style='Pink.TNotebook')
         notebook.pack(fill='both', expand=True, padx=8, pady=8)
-
+        
+        # Crea las 6 pestañas vacías
         file_tab = ttk.Frame(notebook, style='Pink.TFrame')
         adjust_tab = ttk.Frame(notebook, style='Pink.TFrame')
         geom_tab = ttk.Frame(notebook, style='Pink.TFrame')
         channels_tab = ttk.Frame(notebook, style='Pink.TFrame')
         fusion_tab = ttk.Frame(notebook, style='Pink.TFrame')
         hist_tab = ttk.Frame(notebook, style='Pink.TFrame')
-
+        
+        # Agrega las pestañas con sus etiquetas
         notebook.add(file_tab, text='📁 Archivo')
         notebook.add(adjust_tab, text='🎨 Ajustes')
         notebook.add(geom_tab, text='📐 Geometría')
         notebook.add(channels_tab, text='🧩 Canales / Color')
         notebook.add(fusion_tab, text='🔀 Fusión')
         notebook.add(hist_tab, text='📊 Histograma / Export')
-
-        # --- File Tab ---
+        
+        # ===== PESTAÑA: ARCHIVO =====
         ttk.Label(file_tab, text='📂 Controles de archivo', style='PinkBold.TLabel').pack(pady=6)
         ttk.Button(file_tab, text='📁 Abrir imagen', style='Pink.TButton', command=self.open_image).pack(fill='x', padx=6, pady=4)
         ttk.Button(file_tab, text='🖼️ Abrir segunda imagen', style='Pink.TButton', command=self.open_second_image).pack(fill='x', padx=6, pady=4)
@@ -131,26 +151,35 @@ class ImageApp:
         ttk.Separator(file_tab).pack(fill='x', pady=8)
         ttk.Button(file_tab, text='🔁 Restaurar original', style='Pink.TButton', command=self.restore_original).pack(fill='x', padx=6, pady=4)
         ttk.Separator(file_tab).pack(fill='x', pady=6)
+        
+        # Presentación (carrusel de imágenes)
         pres_frame = ttk.Frame(file_tab, style='Pink.TFrame')
         pres_frame.pack(fill='x', padx=6)
         self.pres_btn = ttk.Button(pres_frame, text='🎞️ Iniciar presentación', style='Pink.TButton', command=self.toggle_presentation)
         self.pres_btn.pack(side='left', fill='x', expand=True, pady=4)
         ttk.Separator(file_tab).pack(fill='x', pady=6)
+        
+        # Cambio de tema
         self.mode_btn = ttk.Button(file_tab, text='🌙 Modo oscuro', style='Pink.TButton', command=self.toggle_mode)
         self.mode_btn.pack(fill='x', padx=6, pady=4)
         ttk.Separator(file_tab).pack(fill='x', pady=6)
+        
+        # Gestión de operaciones
         ttk.Button(file_tab, text='📋 Ver operaciones aplicadas', style='Pink.TButton', command=self.show_operations).pack(fill='x', padx=6, pady=4)
         ttk.Button(file_tab, text='↩️ Deshacer última operación', style='Pink.TButton', command=self.undo_last_operation).pack(fill='x', padx=6, pady=4)
         ttk.Button(file_tab, text='🗑️ Limpiar todas las operaciones', style='Pink.TButton', command=self.clear_operations).pack(fill='x', padx=6, pady=4)
-
-        # --- Adjust Tab ---
+        
+        # ===== PESTAÑA: AJUSTES (Brillo y Contraste) =====
         ttk.Label(adjust_tab, text='🌈 Brillo y Contraste', style='PinkBold.TLabel').pack(pady=6)
+        
+        # Brillo global: un slider que suma/resta el mismo valor a todos los píxeles
         ttk.Label(adjust_tab, text='Brillo global (-255 a 255)', style='Pink.TLabel').pack()
         self.brightness_scale = tk.Scale(adjust_tab, from_=-255, to=255, orient='horizontal', bg=self.pink_bg, highlightthickness=0)
         self.brightness_scale.set(0)
         self.brightness_scale.pack(fill='x', padx=6)
         ttk.Button(adjust_tab, text='✨ Aplicar brillo', style='Pink.TButton', command=self.apply_brightness).pack(fill='x', padx=6, pady=6)
-
+        
+        # Brillo por canal: ajusta cada color (R, G, B) por separado
         ttk.Label(adjust_tab, text='🔴🟢🔵 Brillo por canal (R,G,B)', style='Pink.TLabel').pack(pady=(6,0))
         self.br_r = tk.Scale(adjust_tab, from_=-255, to=255, orient='horizontal', bg=self.pink_bg, highlightthickness=0)
         self.br_g = tk.Scale(adjust_tab, from_=-255, to=255, orient='horizontal', bg=self.pink_bg, highlightthickness=0)
@@ -159,118 +188,151 @@ class ImageApp:
         self.br_g.pack(fill='x', padx=6)
         self.br_b.pack(fill='x', padx=6)
         ttk.Button(adjust_tab, text='✨ Aplicar brillo por canal', style='Pink.TButton', command=self.apply_brightness_channels).pack(fill='x', padx=6, pady=6)
-
+        
+        # Contraste logarítmico: usa logaritmos para mejorar detalles en sombras
         ttk.Label(adjust_tab, text='🔎 Contraste logarítmico (c)', style='Pink.TLabel').pack(pady=(6,0))
-        self.log_c = tk.Entry(adjust_tab); self.log_c.insert(0,'1.0'); self.log_c.pack(fill='x', padx=6)
+        self.log_c = tk.Entry(adjust_tab)
+        self.log_c.insert(0, '1.0')
+        self.log_c.pack(fill='x', padx=6)
         ttk.Button(adjust_tab, text='✨ Aplicar log', style='Pink.TButton', command=self.apply_log).pack(fill='x', padx=6, pady=6)
-
+        
+        # Gamma correction: aclara (gamma<1) u oscurece (gamma>1)
         ttk.Label(adjust_tab, text='⚡ Contraste exponencial / gamma', style='Pink.TLabel').pack(pady=(4,0))
-        self.gamma_e = tk.Entry(adjust_tab); self.gamma_e.insert(0,'1.0'); self.gamma_e.pack(fill='x', padx=6)
+        self.gamma_e = tk.Entry(adjust_tab)
+        self.gamma_e.insert(0, '1.0')
+        self.gamma_e.pack(fill='x', padx=6)
         ttk.Button(adjust_tab, text='✨ Aplicar gamma', style='Pink.TButton', command=self.apply_gamma).pack(fill='x', padx=6, pady=6)
-
-        # --- Geometría Tab ---
+        
+        # ===== PESTAÑA: GEOMETRÍA =====
         ttk.Label(geom_tab, text='📐 Operaciones geométricas', style='PinkBold.TLabel').pack(pady=6)
+        
+        # Rotación: ingresa grados (positivo = sentido antihorario)
         ttk.Label(geom_tab, text='Rotación (grados)', style='Pink.TLabel').pack()
-        self.rotate_entry = tk.Entry(geom_tab); self.rotate_entry.insert(0,'0'); self.rotate_entry.pack(fill='x', padx=6)
+        self.rotate_entry = tk.Entry(geom_tab)
+        self.rotate_entry.insert(0, '0')
+        self.rotate_entry.pack(fill='x', padx=6)
         ttk.Button(geom_tab, text='🔁 Rotar', style='Pink.TButton', command=self.apply_rotate).pack(fill='x', padx=6, pady=6)
-
-
+        
+        # Recorte interactivo con mouse
         ttk.Button(geom_tab, text='✂️ Modo recorte (mouse)', style='Pink.TButton', command=self.toggle_crop_mode).pack(fill='x', padx=6, pady=6)
         self.crop_mode_label = ttk.Label(geom_tab, text='', style='Pink.TLabel')
         self.crop_mode_label.pack(pady=4)
-
         ttk.Button(geom_tab, text='✅ Aplicar recorte seleccionado', style='Pink.TButton', command=self.apply_crop_selected).pack(fill='x', padx=6, pady=6)
-
-
+        
+        # Zoom interactivo con mouse
         ttk.Button(geom_tab, text='🔍 Modo zoom (mouse)', style='Pink.TButton', command=self.toggle_zoom_mode).pack(fill='x', padx=6, pady=6)
         self.zoom_mode_label = ttk.Label(geom_tab, text='', style='Pink.TLabel')
         self.zoom_mode_label.pack(pady=4)
-
+        
+        # Zoom visual: solo para ver a diferentes escalas, no modifica la imagen
         ttk.Label(geom_tab, text='🔎 Zoom visual (solo visualizar)', style='Pink.TLabel').pack(pady=(6,0))
         self.visual_zoom = tk.Scale(geom_tab, from_=0.2, to=3.0, resolution=0.1, orient='horizontal', command=self.on_visual_zoom, sliderlength=14)
         self.visual_zoom.set(1.0)
         self.visual_zoom.pack(fill='x', padx=6, pady=(0,8))
-
-        # --- Canales Tab ---
+        
+        # ===== PESTAÑA: CANALES Y COLOR =====
         ttk.Label(channels_tab, text='🧩 Extracción y conversiones', style='PinkBold.TLabel').pack(pady=6)
         ttk.Button(channels_tab, text='🔴🟢🔵 Extraer R,G,B', style='Pink.TButton', command=self.extract_rgb).pack(fill='x', padx=6, pady=4)
         ttk.Button(channels_tab, text='🟦🟨🟩🖤 Extraer C,M,Y,K', style='Pink.TButton', command=self.extract_cmyk).pack(fill='x', padx=6, pady=4)
         ttk.Button(channels_tab, text='🪞 Negativo', style='Pink.TButton', command=self.apply_negative).pack(fill='x', padx=6, pady=4)
         ttk.Button(channels_tab, text='⚪ Convertir a grises', style='Pink.TButton', command=self.apply_gray).pack(fill='x', padx=6, pady=4)
-
+        
+        # Binarización: convierte a blanco y negro
         ttk.Label(channels_tab, text='⚫ Binarizar (umbral)', style='Pink.TLabel').pack(pady=(6,0))
         self.thresh_scale = tk.Scale(channels_tab, from_=0, to=255, orient='horizontal', bg=self.pink_bg, highlightthickness=0)
         self.thresh_scale.set(128)
         self.thresh_scale.pack(fill='x', padx=6)
         ttk.Button(channels_tab, text='⚫ Binarizar', style='Pink.TButton', command=self.apply_binarize).pack(fill='x', padx=6, pady=6)
-
-        # --- Fusión Tab ---
+        
+        # ===== PESTAÑA: FUSIÓN =====
         ttk.Label(fusion_tab, text='🔀 Fusión de imágenes', style='PinkBold.TLabel').pack(pady=6)
         ttk.Label(fusion_tab, text='Alpha (0-1)', style='Pink.TLabel').pack()
-        self.alpha_entry = tk.Entry(fusion_tab); self.alpha_entry.insert(0,'0.5'); self.alpha_entry.pack(fill='x', padx=6)
+        self.alpha_entry = tk.Entry(fusion_tab)
+        self.alpha_entry.insert(0, '0.5')
+        self.alpha_entry.pack(fill='x', padx=6)
         ttk.Button(fusion_tab, text='🔀 Fusionar', style='Pink.TButton', command=self.apply_fuse).pack(fill='x', padx=6, pady=6)
         ttk.Button(fusion_tab, text='✨ Fusionar ecualizadas', style='Pink.TButton', command=self.apply_fuse_eq).pack(fill='x', padx=6, pady=6)
-
-        # --- Histograma Tab ---
+        
+        # ===== PESTAÑA: HISTOGRAMA =====
         ttk.Label(hist_tab, text='📊 Histograma', style='PinkBold.TLabel').pack(pady=6)
         ttk.Button(hist_tab, text='📈 Mostrar histograma', style='Pink.TButton', command=self.show_histogram).pack(fill='x', padx=6, pady=6)
-
+        
+        # Tamaño inicial de la ventana
         root.geometry('1200x760')
         root.bind('<Configure>', self.on_root_configure)
 
-    # --- Helpers ---
+    # ===== MANEJO DE ARCHIVOS =====
+    
     def open_image(self):
-        p = filedialog.askopenfilename(filetypes=[('Images','*.png;*.jpg;*.jpeg;*.bmp;*.tiff')])
+        # Abre diálogo de selección de archivo
+        p = filedialog.askopenfilename(filetypes=[('Images', '*.png;*.jpg;*.jpeg;*.bmp;*.tiff')])
         if p:
+            # Carga la imagen con la librería
             self.original = ip.load_image(p)
+            # Comienza sin modificaciones
             self.img = self.original.copy()
             self.img_path = p
-            self.last_operation = None
+            # Limpia operaciones previas
+            self.operations = []
             self.show_image(self.img)
             self.status.config(text=f'🖼️ Abierta: {os.path.basename(p)}')
+            # La agrega a la lista de presentación automáticamente
             if self.img not in self.presentation_items:
                 self.presentation_items.append(self.img)
 
     def open_second_image(self):
-        p = filedialog.askopenfilename(filetypes=[('Images','*.png;*.jpg;*.jpeg;*.bmp;*.tiff')])
+        # Para operaciones que necesitan dos imágenes (fusión)
+        p = filedialog.askopenfilename(filetypes=[('Images', '*.png;*.jpg;*.jpeg;*.bmp;*.tiff')])
         if p:
             self.second_img = ip.load_image(p)
             self.status.config(text=f'🖼️ Segunda imagen: {os.path.basename(p)}')
 
     def save_image(self):
+        # Guarda la imagen con todas las operaciones aplicadas
         if self.img is None:
-            messagebox.showwarning('Aviso','No hay imagen para guardar')
+            messagebox.showwarning('Aviso', 'No hay imagen para guardar')
             return
-        p = filedialog.asksaveasfilename(defaultextension='.png', filetypes=[('PNG','*.png'),('JPEG','*.jpg')])
+        p = filedialog.asksaveasfilename(defaultextension='.png', filetypes=[('PNG', '*.png'), ('JPEG', '*.jpg')])
         if p:
             ip.save_image(self.img, p)
             self.status.config(text=f'💾 Guardada: {os.path.basename(p)}')
 
     def restore_original(self):
+        # Vuelve a la imagen original sin ninguna operación
         if self.original is None:
-            messagebox.showinfo('Restaurar','No hay imagen original')
+            messagebox.showinfo('Restaurar', 'No hay imagen original')
             return
         self.operations = []
         self.img = self.original.copy()
         self.show_image(self.img)
         self.status.config(text='🔁 Restaurado a original')
 
+    # ===== VISUALIZACIÓN =====
+    
     def show_image(self, img):
+        # Redimensiona la imagen para que quepa en el canvas manteniendo aspecto
         if img is None:
             return
         w, h = img.size
         canv_w = max(200, int(self.canvas.winfo_width() or 800))
         canv_h = max(200, int(self.canvas.winfo_height() or 600))
+        
+        # Calcula escala para que quepa pero sin distorsionar
         scale = self.display_scale * min(1.0, canv_w / w, canv_h / h)
+        
+        # Si necesita redimensionarse, usa LANCZOS (mejor calidad)
         if scale < 1.0 or abs(scale - 1.0) > 1e-6:
             disp = img.resize((max(1, int(w*scale)), max(1, int(h*scale))), Image.LANCZOS)
         else:
             disp = img.copy()
+        
+        # Convierte PIL a formato Tkinter y la dibuja
         self.img_tk = ImageTk.PhotoImage(disp)
         self.canvas.delete('all')
         self.canvas.create_image(0, 0, anchor='nw', image=self.img_tk)
 
     def on_visual_zoom(self, val):
+        # El slider de zoom solo cambia cómo se visualiza, no modifica la imagen
         try:
             self.display_scale = float(val)
             if self.img:
@@ -279,20 +341,26 @@ class ImageApp:
             pass
 
     def on_root_configure(self, event):
+        # Cada vez que se redimensiona la ventana, redibujar la imagen
         if self.img:
             self.show_image(self.img)
 
-    # --- Transformaciones ---
+    # ===== TRANSFORMACIONES (Sistema de operaciones) =====
+    
     def apply_brightness(self):
+        # Brillo: obtiene valor del slider, elimina brillo anterior si existe,
+        # agrega el nuevo y recalcula todas las operaciones
         if not self.original:
             return
         val = self.brightness_scale.get()
+        # Reemplaza brillo anterior si lo hay
         self.operations = [op for op in self.operations if op[0] != 'brightness']
         self.operations.append(('brightness', {'value': val}))
         self.apply_operations()
         self.status.config(text=f'✨ Brillo: {val}')
 
     def apply_brightness_channels(self):
+        # Similar pero para cada canal por separado
         if not self.original:
             return
         r, g, b = self.br_r.get(), self.br_g.get(), self.br_b.get()
@@ -302,6 +370,7 @@ class ImageApp:
         self.status.config(text=f'✨ Brillo RGB: {r},{g},{b}')
 
     def apply_log(self):
+        # Contraste logarítmico
         if not self.original:
             return
         try:
@@ -314,6 +383,7 @@ class ImageApp:
         self.status.config(text=f'🔎 Log c={c}')
 
     def apply_gamma(self):
+        # Gamma correction / contraste exponencial
         if not self.original:
             return
         try:
@@ -326,6 +396,7 @@ class ImageApp:
         self.status.config(text=f'⚡ Gamma={g}')
 
     def apply_rotate(self):
+        # Rotación en grados
         if not self.original:
             return
         try:
@@ -337,17 +408,23 @@ class ImageApp:
         self.apply_operations()
         self.status.config(text=f'🔁 Rotado {ang}°')
 
+    # ===== RECORTE INTERACTIVO (con mouse) =====
+    
     def toggle_crop_mode(self):
+        # Activa/desactiva el modo recorte interactivo
         if not self.img:
             return
         self.crop_mode = not self.crop_mode
+        
         if self.crop_mode:
+            # Activa modo: muestra instrucción y vincula eventos del mouse
             self.crop_mode_label.config(text='🖱️ Arrastra para recortar', foreground='red')
             self.canvas.config(cursor='crosshair')
             self.canvas.bind('<Button-1>', self.on_crop_start)
             self.canvas.bind('<B1-Motion>', self.on_crop_drag)
             self.canvas.bind('<ButtonRelease-1>', self.on_crop_end)
         else:
+            # Desactiva modo: limpia todo
             self.crop_mode_label.config(text='')
             self.canvas.config(cursor='arrow')
             self.canvas.unbind('<Button-1>')
@@ -361,68 +438,81 @@ class ImageApp:
             self.show_image(self.img)
 
     def on_crop_start(self, event):
-        # Convierte coordenadas del canvas a coordenadas de imagen
+        # Marca el punto inicial del arrastre
         self.crop_start = (event.x, event.y)
 
     def on_crop_drag(self, event):
-        # Dibuja el rectángulo mientras arrastra
+        # Dibuja un rectángulo punteado mientras se arrastra
+        # Lo borra y redibuja cada movimiento para dar sensación fluida
         self.crop_end = (event.x, event.y)
         if self.crop_rect:
             self.canvas.delete(self.crop_rect)
-
+        
         x1, y1 = self.crop_start
         x2, y2 = self.crop_end
-
-        # Dibuja rectángulo punteado rojo
+        
+        # Rectángulo punteado rojo = vista previa del recorte
         self.crop_rect = self.canvas.create_rectangle(
-            x1, y1, x2, y2, 
-            outline='red', 
-            width=2, 
+            x1, y1, x2, y2,
+            outline='red',
+            width=2,
             dash=(4, 4)
         )
 
     def on_crop_end(self, event):
-        # Guarda el punto final cuando suelta el mouse
+        # Guarda punto final y avisa que confirme el recorte
         self.crop_end = (event.x, event.y)
         self.crop_mode_label.config(text='📌 Presiona el botón "Aplicar recorte" para confirmar', foreground='blue')
 
     def apply_crop_selected(self):
+        # Convierte las coordenadas del canvas (visualización) a coordenadas de imagen (original)
+        # porque el canvas puede estar ampliado/reducido por zoom visual
         if self.crop_start is None or self.crop_end is None:
             messagebox.showwarning('Aviso', 'Primero haz el recorte con el mouse')
             return
-    
-        # Escala las coordenadas del canvas a la imagen original
+        
+        # Obtiene tamaño de la imagen original
         w, h = self.original.size
         canv_w = self.canvas.winfo_width()
         canv_h = self.canvas.winfo_height()
+        
+        # Calcula el factor de escala usado en visualización
         scale = self.display_scale * min(1.0, canv_w / w, canv_h / h)
-    
+        
+        # Convierte coordenadas canvas → imagen real
         x1 = int(self.crop_start[0] / scale)
         y1 = int(self.crop_start[1] / scale)
         x2 = int(self.crop_end[0] / scale)
         y2 = int(self.crop_end[1] / scale)
-    
-        # Asegura que left < right, top < bottom
+        
+        # Asegura orden correcto (left < right, top < bottom)
         box = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
-    
-        # Agrega la operación a la lista
+        
+        # Agrega a operaciones (reemplaza recorte anterior si existe)
         self.operations = [op for op in self.operations if op[0] != 'crop']
         self.operations.append(('crop', {'box': box}))
         self.apply_operations()
         
-        self.toggle_crop_mode()  # Desactiva modo recorte
-        self.status.config(text=f'✂️ Recortado')
+        # Desactiva modo recorte
+        self.toggle_crop_mode()
+        self.status.config(text='✂️ Recortado')
 
+    # ===== ZOOM INTERACTIVO (con mouse) =====
+    
     def toggle_zoom_mode(self):
+        # Activa/desactiva el modo zoom interactivo
         if not self.img:
             return
         self.zoom_mode = not self.zoom_mode
+        
         if self.zoom_mode:
+            # Activa modo: cursor cambia a cruz, vincula eventos
             self.zoom_mode_label.config(text='🔍 Click para zoom | Doble click para deshacer', foreground='green')
             self.canvas.config(cursor='crosshair')
             self.canvas.bind('<Button-1>', self.on_zoom_click)
             self.canvas.bind('<Double-Button-1>', self.on_zoom_undo)
         else:
+            # Desactiva modo
             self.zoom_mode_label.config(text='')
             self.canvas.config(cursor='arrow')
             self.canvas.unbind('<Button-1>')
@@ -430,56 +520,61 @@ class ImageApp:
             self.zoom_point = None
 
     def on_zoom_click(self, event):
+        # Click simple: planea aplicar zoom después de un pequeño delay
+        # (para evitar confundir con doble click)
         if event.num == 1 and not self._is_double_click(event):
-            # Espera un poco para ver si es doble click
             self.root.after(200, lambda: self._apply_zoom_at_point(event.x, event.y))
 
     def _is_double_click(self, event):
-        # Se maneja con el evento Double-Button-1
+        # Los dobles clicks se manejan en on_zoom_undo(), no aquí
         return False
 
     def _apply_zoom_at_point(self, canv_x, canv_y):
+        # Aplica zoom 2x centrado en el punto donde hicimos click
         if not self.crop_mode and self.zoom_mode:
-            # Convierte coordenadas canvas a coordenadas de imagen
+            # Convierte coordenadas canvas → coordenadas imagen
             w, h = self.original.size
             canv_w = self.canvas.winfo_width()
             canv_h = self.canvas.winfo_height()
             scale = self.display_scale * min(1.0, canv_w / w, canv_h / h)
-
+            
             img_x = int(canv_x / scale)
             img_y = int(canv_y / scale)
-
-            # Calcula el área a recortar (centrada en el punto de click)
+            
+            # Calcula área a recortar (zoom_factor=2 significa "muestra mitad del tamaño")
             zoom_w = w / self.zoom_factor
             zoom_h = h / self.zoom_factor
-
+            
+            # Centra la zona en el punto de click
             left = max(0, int(img_x - zoom_w / 2))
             top = max(0, int(img_y - zoom_h / 2))
             right = min(w, int(left + zoom_w))
             bottom = min(h, int(top + zoom_h))
-
-            # Ajusta si se sale del límite
+            
+            # Ajusta si se sale de los límites de la imagen
             if right - left < zoom_w:
                 left = max(0, int(right - zoom_w))
             if bottom - top < zoom_h:
                 top = max(0, int(bottom - zoom_h))
-
+            
             box = (left, top, right, bottom)
+            # El zoom es un recorte, así que lo agregamos como operación
             self.img = ip.crop_image(self.original.copy(), box)
-            self.last_operation = 'zoom_click'
             self.show_image(self.img)
             self.zoom_mode_label.config(text='🔍 Zoom aplicado | Doble click para deshacer', foreground='blue')
             self.status.config(text='🔍 Zoom aplicado')
 
     def on_zoom_undo(self, event):
-        # Doble click deshace el zoom
+        # Doble click deshace el zoom (vuelve a original)
         self.img = self.original.copy()
-        self.last_operation = None
         self.show_image(self.img)
         self.zoom_mode_label.config(text='🔍 Click para zoom | Doble click para deshacer', foreground='green')
         self.status.config(text='↩️ Zoom deshecho')
 
+    # ===== TRANSFORMACIONES: CANALES Y COLOR =====
+    
     def apply_negative(self):
+        # Invierte todos los colores
         if not self.original:
             return
         self.operations = [op for op in self.operations if op[0] != 'negative']
@@ -488,6 +583,7 @@ class ImageApp:
         self.status.config(text='🪞 Negativo')
 
     def apply_gray(self):
+        # Convierte a escala de grises
         if not self.original:
             return
         self.operations = [op for op in self.operations if op[0] != 'gray']
@@ -496,6 +592,7 @@ class ImageApp:
         self.status.config(text='⚪ Grises')
 
     def apply_binarize(self):
+        # Convierte a blanco y negro puro (umbral ajustable)
         if not self.original:
             return
         t = self.thresh_scale.get()
@@ -504,9 +601,12 @@ class ImageApp:
         self.apply_operations()
         self.status.config(text=f'⚫ Binarizado umbral={t}')
 
+    # ===== TRANSFORMACIONES: FUSIÓN =====
+    
     def apply_fuse(self):
+        # Mezcla dos imágenes: imagen1*alpha + imagen2*(1-alpha)
         if not self.original or not self.second_img:
-            messagebox.showwarning('Aviso','Abra ambas imágenes')
+            messagebox.showwarning('Aviso', 'Abra ambas imágenes')
             return
         try:
             a = float(self.alpha_entry.get())
@@ -518,8 +618,9 @@ class ImageApp:
         self.status.config(text=f'🔀 Fusión alpha={a}')
 
     def apply_fuse_eq(self):
+        # Mezcla pero primero iguala histogramas (mejor resultado si hay diferencias de luz)
         if not self.original or not self.second_img:
-            messagebox.showwarning('Aviso','Abra ambas imágenes')
+            messagebox.showwarning('Aviso', 'Abra ambas imágenes')
             return
         try:
             a = float(self.alpha_entry.get())
@@ -530,62 +631,81 @@ class ImageApp:
         self.apply_operations()
         self.status.config(text=f'✨ Fusión ecualizada alpha={a}')
 
+    # ===== ANÁLISIS: HISTOGRAMA =====
+    
     def show_histogram(self):
+        # Abre ventana con gráfico del histograma RGB
         if not self.img:
             return
         r, g, b = ip.histogram(self.img)
+        
+        # Crea figura de matplotlib
         fig = plt.Figure(figsize=(5, 3))
         ax = fig.add_subplot(111)
+        
+        # Dibuja tres líneas (una por cada canal)
         ax.plot(r, label='R', color='red')
         ax.plot(g, label='G', color='green')
         ax.plot(b, label='B', color='blue')
         ax.set_title('📊 Histograma')
         ax.legend()
+        
+        # Crea ventana nueva para mostrar el gráfico
         win = tk.Toplevel(self.root)
         win.title('📊 Histograma')
         canvas = FigureCanvasTkAgg(fig, master=win)
         canvas.get_tk_widget().pack(fill='both', expand=True)
         canvas.draw()
 
+    # ===== EXTRACCIÓN DE CANALES =====
+    
     def extract_rgb(self):
+        # Muestra los canales R, G, B por separado en ventana nueva
+        # Cada uno tintado con su color real
         if not self.img:
             return
         r, g, b = ip.extract_rgb_layers(self.img)
+        
         win = tk.Toplevel(self.root)
         win.title('🔴🟢🔵 Canales R, G, B')
+        
+        # Dibuja los 3 canales lado a lado
         for idx, ch in enumerate((r, g, b), start=1):
             w = tk.Canvas(win, width=220, height=200, bg='black', highlightthickness=0)
             w.grid(row=0, column=idx-1, padx=6, pady=6)
             img_disp = ch.convert('RGB')
             photo = ImageTk.PhotoImage(img_disp.resize((220, 200), Image.LANCZOS))
-            w.image = photo
+            w.image = photo  # Guarda referencia para evitar que el garbage collector lo borre
             w.create_image(0, 0, anchor='nw', image=photo)
+        
         self.status.config(text='🔎 RGB mostrados')
 
     def extract_cmyk(self):
+        # Similar a RGB pero muestra canales CMYK
         if not self.img:
             return
         c, m, y, k = ip.extract_cmyk_layers(self.img)
+        
         win = tk.Toplevel(self.root)
         win.title('🟦🟨🟩🖤 Canales C, M, Y, K')
+        
+        # Dibuja los 4 canales
         for idx, ch in enumerate((c, m, y, k)):
             w = tk.Canvas(win, width=220, height=200, bg='black', highlightthickness=0)
             w.grid(row=0, column=idx, padx=6, pady=6)
             img_disp = ImageTk.PhotoImage(ch.resize((220, 200), Image.LANCZOS))
             w.image = img_disp
             w.create_image(0, 0, anchor='nw', image=img_disp)
+        
         self.status.config(text='🔎 CMYK mostrados')
 
-    # --- Presentación ---
-    def add_current_to_presentation(self):
-        if self.img and self.img not in self.presentation_items:
-            self.presentation_items.append(self.img)
-            self.status.config(text='🎞️ Añadida a presentación')
-
+    # ===== PRESENTACIÓN (Carrusel de imágenes) =====
+    
     def toggle_presentation(self):
+        # Activa/desactiva modo presentación (cicla entre imágenes cada 2 segundos)
         if not self.presentation_running:
             if not self.presentation_items:
-                messagebox.showinfo('Presentación','No hay imágenes')
+                messagebox.showinfo('Presentación', 'No hay imágenes')
                 return
             self.presentation_running = True
             self.pres_btn.config(text='⏸️ Pausar')
@@ -598,57 +718,29 @@ class ImageApp:
             self.status.config(text='⏸️ Pausada')
 
     def _run_presentation(self):
+        # Loop de presentación: muestra imagen, espera, pasa a siguiente
         if not self.presentation_running or not self.presentation_items:
             return
+        
         item = self.presentation_items[self.presentation_index % len(self.presentation_items)]
         self.img = item.copy()
         self.show_image(self.img)
         self.presentation_index += 1
+        
+        # Planea la siguiente imagen en 2 segundos
         self.root.after(self.presentation_interval_ms, self._run_presentation)
 
-    def undo_last_operation(self):
-        if not self.operations:
-            messagebox.showinfo('Deshacer', 'No hay operaciones para deshacer')
-            return
-        
-        # Elimina la última operación
-        removed = self.operations.pop()
-        self.apply_operations()
-        self.status.config(text=f'↩️ Deshecha: {removed[0]}')
-
-    # --- Modo Oscuro/Claro ---
-    def toggle_mode(self):
-        current = self.root.cget('bg')
-        if current == self.pink_bg:
-            # Modo oscuro
-            self.root.configure(bg=self.dark_bg)
-            self.canvas.configure(bg=self.dark_panel)
-            self.status.configure(bg=self.dark_panel, fg=self.text_light)
-            self.style.configure('Pink.TFrame', background=self.dark_bg)
-            self.style.configure('Pink.TLabel', background=self.dark_bg, foreground=self.text_light)
-            self.style.configure('PinkBold.TLabel', background=self.dark_bg, foreground=self.text_light)
-            self.style.configure('Pink.TNotebook.Tab', background=self.dark_panel)
-            self.mode_btn.config(text='☀️ Modo claro')
-            self.status.config(text='🌙 Modo oscuro')
-        else:
-            # Modo claro
-            self.root.configure(bg=self.pink_bg)
-            self.canvas.configure(bg='black')
-            self.status.configure(bg=self.pink_button, fg=self.text_dark)
-            self.style.configure('Pink.TFrame', background=self.pink_bg)
-            self.style.configure('Pink.TLabel', background=self.pink_bg, foreground=self.text_dark)
-            self.style.configure('PinkBold.TLabel', background=self.pink_bg, foreground=self.text_dark)
-            self.style.configure('Pink.TNotebook.Tab', background=self.pink_panel)
-            self.mode_btn.config(text='🌙 Modo oscuro')
-            self.status.config(text='✨ Modo claro')
+    # ===== GESTIÓN DE OPERACIONES =====
     
     def apply_operations(self):
-        """Recalcula la imagen aplicando todas las operaciones en orden"""
+        # Recalcula la imagen desde cero aplicando TODAS las operaciones en orden
+        # Esta es la clave del sistema: no acumula efectos, siempre parte de original
         if self.original is None:
             return
-
+        
         result = self.original.copy()
-
+        
+        # Aplica cada operación guardada en secuencia
         for op_type, params in self.operations:
             if op_type == 'brightness':
                 result = ip.adjust_brightness_global(result, params['value'])
@@ -674,30 +766,71 @@ class ImageApp:
                 result = ip.fuse_images(result, self.second_img, alpha=params['alpha'])
             elif op_type == 'fuse_eq':
                 result = ip.fuse_equalized(result, self.second_img, alpha=params['alpha'])
-
+        
+        # Guarda resultado y muestra
         self.img = result
         self.show_image(self.img)
 
+    def undo_last_operation(self):
+        # Elimina la última operación de la lista
+        if not self.operations:
+            messagebox.showinfo('Deshacer', 'No hay operaciones para deshacer')
+            return
+        
+        removed = self.operations.pop()
+        self.apply_operations()
+        self.status.config(text=f'↩️ Deshecha: {removed[0]}')
+
     def show_operations(self):
+        # Muestra ventana con todas las operaciones activas
         if not self.operations:
             messagebox.showinfo('Operaciones', 'No hay operaciones aplicadas')
             return
-
+        
         msg = '📋 Operaciones aplicadas:\n\n'
         for i, (op_type, params) in enumerate(self.operations, 1):
             msg += f'{i}. {op_type}: {params}\n'
-
         messagebox.showinfo('Operaciones', msg)
 
     def clear_operations(self):
+        # Limpia todas las operaciones (vuelve a imagen original)
         if not self.operations:
             messagebox.showinfo('Limpiar', 'No hay operaciones')
             return
-
+        
         self.operations = []
         self.img = self.original.copy()
         self.show_image(self.img)
         self.status.config(text='🗑️ Todas las operaciones eliminadas')
+
+    # ===== TEMA: CLARO/OSCURO =====
+    
+    def toggle_mode(self):
+        # Alterna entre tema claro (rosa) y oscuro
+        current = self.root.cget('bg')
+        
+        if current == self.pink_bg:
+            # Cambiar a oscuro
+            self.root.configure(bg=self.dark_bg)
+            self.canvas.configure(bg=self.dark_panel)
+            self.status.configure(bg=self.dark_panel, fg=self.text_light)
+            self.style.configure('Pink.TFrame', background=self.dark_bg)
+            self.style.configure('Pink.TLabel', background=self.dark_bg, foreground=self.text_light)
+            self.style.configure('PinkBold.TLabel', background=self.dark_bg, foreground=self.text_light)
+            self.style.configure('Pink.TNotebook.Tab', background=self.dark_panel)
+            self.mode_btn.config(text='☀️ Modo claro')
+            self.status.config(text='🌙 Modo oscuro')
+        else:
+            # Cambiar a claro
+            self.root.configure(bg=self.pink_bg)
+            self.canvas.configure(bg='black')
+            self.status.configure(bg=self.pink_button, fg=self.text_dark)
+            self.style.configure('Pink.TFrame', background=self.pink_bg)
+            self.style.configure('Pink.TLabel', background=self.pink_bg, foreground=self.text_dark)
+            self.style.configure('PinkBold.TLabel', background=self.pink_bg, foreground=self.text_dark)
+            self.style.configure('Pink.TNotebook.Tab', background=self.pink_panel)
+            self.mode_btn.config(text='🌙 Modo oscuro')
+            self.status.config(text='✨ Modo claro')
 
 
 if __name__ == '__main__':
