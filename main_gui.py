@@ -1,5 +1,5 @@
 """
-🌸 Image Studio – Procesamiento de Imágenes
+🌸 Procesamiento de Imágenes
 Interfaz gráfica usando Tkinter con pestañas.
 
 Sistema de operaciones sin acumulación:
@@ -18,7 +18,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-
 
 class ImageApp:
     def __init__(self, root):
@@ -41,11 +40,7 @@ class ImageApp:
         # Zoom visual: solo para la vista, no modifica la imagen
         self.display_scale = 1.0
         
-        # Modo presentación: cicla entre imágenes cargadas
-        self.presentation_running = False
-        self.presentation_interval_ms = 2000
-        self.presentation_items = []
-        self.presentation_index = 0
+
         
         # ===== VARIABLES DE INTERACCIÓN (recorte con mouse) =====
         self.crop_mode = False            # ¿estamos en modo seleccionar área?
@@ -119,9 +114,7 @@ class ImageApp:
         
         # Barra de estado en la parte inferior
         # Muestra mensajes como "🖼️ Imagen abierta", "✨ Brillo aplicado", etc.
-        self.status = tk.Label(root, text='✨ Listo', bd=1, relief='sunken', anchor='w', bg=self.pink_button)
-        self.status.pack(side='bottom', fill='x')
-        
+
         # ===== PESTAÑAS (Notebook) =====
         # Sistema de tabs para organizar los controles
         notebook = ttk.Notebook(right, style='Pink.TNotebook')
@@ -152,12 +145,6 @@ class ImageApp:
         ttk.Button(file_tab, text='🔁 Restaurar original', style='Pink.TButton', command=self.restore_original).pack(fill='x', padx=6, pady=4)
         ttk.Separator(file_tab).pack(fill='x', pady=6)
         
-        # Presentación (carrusel de imágenes)
-        pres_frame = ttk.Frame(file_tab, style='Pink.TFrame')
-        pres_frame.pack(fill='x', padx=6)
-        self.pres_btn = ttk.Button(pres_frame, text='🎞️ Iniciar presentación', style='Pink.TButton', command=self.toggle_presentation)
-        self.pres_btn.pack(side='left', fill='x', expand=True, pady=4)
-        ttk.Separator(file_tab).pack(fill='x', pady=6)
         
         # Cambio de tema
         self.mode_btn = ttk.Button(file_tab, text='🌙 Modo oscuro', style='Pink.TButton', command=self.toggle_mode)
@@ -276,9 +263,6 @@ class ImageApp:
             self.operations = []
             self.show_image(self.img)
             self.status.config(text=f'🖼️ Abierta: {os.path.basename(p)}')
-            # La agrega a la lista de presentación automáticamente
-            if self.img not in self.presentation_items:
-                self.presentation_items.append(self.img)
 
     def open_second_image(self):
         # Para operaciones que necesitan dos imágenes (fusión)
@@ -530,43 +514,17 @@ class ImageApp:
         return False
 
     def _apply_zoom_at_point(self, canv_x, canv_y):
-        # Aplica zoom 2x centrado en el punto donde hicimos click
+        # Solo cambia el display_scale, no modifica la imagen
         if not self.crop_mode and self.zoom_mode:
-            # Convierte coordenadas canvas → coordenadas imagen
-            w, h = self.original.size
-            canv_w = self.canvas.winfo_width()
-            canv_h = self.canvas.winfo_height()
-            scale = self.display_scale * min(1.0, canv_w / w, canv_h / h)
-            
-            img_x = int(canv_x / scale)
-            img_y = int(canv_y / scale)
-            
-            # Calcula área a recortar (zoom_factor=2 significa "muestra mitad del tamaño")
-            zoom_w = w / self.zoom_factor
-            zoom_h = h / self.zoom_factor
-            
-            # Centra la zona en el punto de click
-            left = max(0, int(img_x - zoom_w / 2))
-            top = max(0, int(img_y - zoom_h / 2))
-            right = min(w, int(left + zoom_w))
-            bottom = min(h, int(top + zoom_h))
-            
-            # Ajusta si se sale de los límites de la imagen
-            if right - left < zoom_w:
-                left = max(0, int(right - zoom_w))
-            if bottom - top < zoom_h:
-                top = max(0, int(bottom - zoom_h))
-            
-            box = (left, top, right, bottom)
-            # El zoom es un recorte, así que lo agregamos como operación
-            self.img = ip.crop_image(self.original.copy(), box)
+            # Aumenta el zoom visual 2x
+            self.display_scale *= self.zoom_factor
             self.show_image(self.img)
             self.zoom_mode_label.config(text='🔍 Zoom aplicado | Doble click para deshacer', foreground='blue')
             self.status.config(text='🔍 Zoom aplicado')
 
     def on_zoom_undo(self, event):
-        # Doble click deshace el zoom (vuelve a original)
-        self.img = self.original.copy()
+        # Doble click vuelve al zoom normal (1.0)
+        self.display_scale = 1.0
         self.show_image(self.img)
         self.zoom_mode_label.config(text='🔍 Click para zoom | Doble click para deshacer', foreground='green')
         self.status.config(text='↩️ Zoom deshecho')
@@ -699,36 +657,6 @@ class ImageApp:
         
         self.status.config(text='🔎 CMYK mostrados')
 
-    # ===== PRESENTACIÓN (Carrusel de imágenes) =====
-    
-    def toggle_presentation(self):
-        # Activa/desactiva modo presentación (cicla entre imágenes cada 2 segundos)
-        if not self.presentation_running:
-            if not self.presentation_items:
-                messagebox.showinfo('Presentación', 'No hay imágenes')
-                return
-            self.presentation_running = True
-            self.pres_btn.config(text='⏸️ Pausar')
-            self.presentation_index = 0
-            self._run_presentation()
-            self.status.config(text='🎞️ Presentación iniciada')
-        else:
-            self.presentation_running = False
-            self.pres_btn.config(text='🎞️ Iniciar')
-            self.status.config(text='⏸️ Pausada')
-
-    def _run_presentation(self):
-        # Loop de presentación: muestra imagen, espera, pasa a siguiente
-        if not self.presentation_running or not self.presentation_items:
-            return
-        
-        item = self.presentation_items[self.presentation_index % len(self.presentation_items)]
-        self.img = item.copy()
-        self.show_image(self.img)
-        self.presentation_index += 1
-        
-        # Planea la siguiente imagen en 2 segundos
-        self.root.after(self.presentation_interval_ms, self._run_presentation)
 
     # ===== GESTIÓN DE OPERACIONES =====
     
