@@ -1,4 +1,4 @@
-# 🌸 Image Studio – Manual de Usuario
+# 🌸 – Manual de Usuario
 
 ## Descripción General
 
